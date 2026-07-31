@@ -8,12 +8,6 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_PROXIES = [
-    "http://8.210.83.33:80",
-    "http://47.88.15.163:3128",
-    "http://104.248.48.172:3128",
-]
-
 PROXY_SOURCES = [
     "https://free-proxy-list.net/",
     "https://www.sslproxies.org/",
@@ -133,8 +127,24 @@ class ProxyManager:
 
 _manager = ProxyManager()
 
+
 def get_working_proxy():
+    """Return a configured proxy, or None.
+
+    Proxies are strictly opt-in. Set USE_PROXY=true and either:
+      - PROXY_URL      -> a single fixed proxy is used directly, or
+      - (optional pool) -> the ProxyManager scrapes/validates proxies.
+    """
+    try:
+        from config import USE_PROXY, PROXY_URL
+    except Exception:
+        USE_PROXY, PROXY_URL = False, ""
+
+    if not USE_PROXY:
+        return None
+
+    if PROXY_URL and PROXY_URL.strip():
+        return PROXY_URL.strip()
+
     proxy = _manager.get_proxy()
-    if proxy:
-        return proxy
-    return random.choice(FALLBACK_PROXIES)
+    return proxy if proxy else None

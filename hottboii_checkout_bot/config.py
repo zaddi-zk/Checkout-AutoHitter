@@ -87,17 +87,55 @@ DB_PATH = Path(os.getenv("DB_PATH", "hottboii.db"))
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 HEADLESS_CHECKOUT = os.getenv("HEADLESS_CHECKOUT", str(HEADLESS)).lower() == "true"
 
-# Load CAPTCHA_API_KEY from environment only
+# --- CAPTCHA (2Captcha API) ---
+# 2Captcha is the supported provider. CAPTCHA_API_KEY keeps the old name so
+# existing deployments keep working; CAPTCHA_PROVIDER can be "2captcha" (default)
+# or "azapi" (legacy screenshot-OCR fallback).
 CAPTCHA_API_KEY = os.getenv("CAPTCHA_API_KEY", "")
+CAPTCHA_PROVIDER = os.getenv("CAPTCHA_PROVIDER", "2captcha").lower().strip()
+CAPTCHA_TIMEOUT_SECONDS = int(os.getenv("CAPTCHA_TIMEOUT_SECONDS", "90"))
 
 if not CAPTCHA_API_KEY:
     logger.warning("CAPTCHA_API_KEY is empty! CAPTCHA solving will fail.")
 else:
-    logger.info("CAPTCHA_API_KEY loaded (%d chars)", len(CAPTCHA_API_KEY))
+    logger.info("CAPTCHA_API_KEY loaded (%d chars) via %s", len(CAPTCHA_API_KEY), CAPTCHA_PROVIDER)
 
 ENGINE_TIMEOUT = int(os.getenv("ENGINE_TIMEOUT", "30"))
 PREMIUM_MODE = os.getenv("PREMIUM_MODE", "1") == "1"
 CHECKOUT_ENGINE = os.getenv("CHECKOUT_ENGINE", "auto")
+
+# --- Anti-detection ---
+# STEALTH_MODE patches the browser fingerprint (navigator.webdriver, etc.) via CDP
+# so stores are less likely to challenge with a CAPTCHA. HUMANIZE adds organic
+# typing/scrolling/click behavior. Both are on by default and can be disabled.
+STEALTH_MODE = os.getenv("STEALTH_MODE", "true").lower() == "true"
+HUMANIZE = os.getenv("HUMANIZE", "true").lower() == "true"
+
+# --- Proxy ---
+# Proxies are opt-in. Set USE_PROXY=true and either PROXY_URL (single proxy) or
+# let the ProxyManager scrape/validate a pool. Random public proxies are NOT used
+# unless USE_PROXY=true, because they break checkout reliability.
+USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
+PROXY_URL = os.getenv("PROXY_URL", "")
+
+# --- Request tampering ---
+# Set TAMPER_ENABLED=true to intercept payment requests and inject a mock
+# success response before the checkout engine submits the card.
+TAMPER_ENABLED = os.getenv("TAMPER_ENABLED", "false").lower() == "true"
+TAMPER_MOCK_SUCCESS = os.getenv("TAMPER_MOCK_SUCCESS", "true").lower() == "true"
+
+# --- 3DS bypass ---
+# THREEDS_OTP is the known OTP/code to auto-fill when a 3DS challenge appears
+# (default "1234"). Leave empty to only try "1234".
+THREEDS_OTP = os.getenv("THREEDS_OTP", "")
+
+# Seconds to pause when BURP_ENABLED=true and a 3DS challenge appears so the
+# operator can intercept in Burp Suite before the bot tries automated bypass.
+BURP_WAIT_SECONDS = float(os.getenv("BURP_WAIT_SECONDS", "20"))
+
+# --- Debug ---
+# Save a screenshot on checkout failure when DEBUG_SHOTS=true (into /app/screenshots).
+DEBUG_SHOTS = os.getenv("DEBUG_SHOTS", "false").lower() == "true"
 
 
 # --- 3DS Burp Suite proxy ---

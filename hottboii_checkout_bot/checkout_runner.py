@@ -21,16 +21,18 @@ def run_checkout_with_fallback(
     captcha_handler: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, str]:
 
+    # Proxy is opt-in (USE_PROXY=true). Random public proxies are never used
+    # unless explicitly configured, because they break checkout reliability.
+    proxy = get_working_proxy()
+    strategies = [("direct", None)]
+    if proxy:
+        strategies.insert(0, ("proxy", proxy))
+        send_update(f"🌐 Proxy acquired: {proxy}")
+
     results = []
 
     for name, engine_func in ENGINES:
-        proxy = get_working_proxy()
-        strategy = [("direct", None)]
-        if proxy:
-            strategy.insert(0, ("proxy", proxy))
-            send_update(f"🌐 Proxy acquired: {proxy}")
-
-        for mode, px in strategy:
+        for mode, px in strategies:
             label = f"{name} {'🌐' if mode == 'proxy' else '🔌 direct'}"
             send_update(f"🔄 Trying {label}...")
             try:
@@ -41,31 +43,20 @@ def run_checkout_with_fallback(
 
                 msg = result.get("message", "Unknown error")[:150]
                 if result.get("status") == "success":
-                    send_update(f"✅ {label} reported success, verifying truth...")
+                    send_update(f"✅ {label} confirmed the order!")
+                    return {
+                        "status": "success",
+                        "message": f"Order confirmed via {name} ({mode}).",
+                    }
                 else:
                     send_update(f"❌ {label} failed: {msg}")
-
-                if "SSL_PROTOCOL" in msg or "ssl_protocol" in msg:
-                    send_update("↩️ SSL error — retrying without proxy...")
-                    break
             except Exception as e:
                 err_str = str(e)[:150]
                 results.append({"engine": name, "mode": mode, "result": {"status": "failed", "message": err_str}})
                 send_update(f"⚠️ {label} error: {err_str}")
-                if "SSL_PROTOCOL" in err_str or "ssl_protocol" in err_str:
-                    send_update("↩️ SSL error — retrying without proxy...")
-                    break
             time.sleep(1)
 
         time.sleep(2)
-
-    successes = [r for r in results if r["result"].get("status") == "success"]
-
-    if successes:
-        send_update(f"\n📊 FINAL VERDICT: {len(successes)}/{len(ENGINES)} engines reported order confirmation")
-        for s in successes:
-            send_update(f"  ✅ {s['engine']} ({s['mode']})")
-        return {"status": "success", "message": "Order confirmed — verified across engines."}
 
     send_update("\n📊 FINAL VERDICT: No engine confirmed the order")
     last_msg = results[-1]["result"].get("message", "Unknown error") if results else "All engines failed."

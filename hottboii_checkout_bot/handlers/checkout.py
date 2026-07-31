@@ -124,6 +124,7 @@ async def handle_checkout_url(update: Update, context: ContextTypes.DEFAULT_TYPE
         "93277\n"
         "getmycheckout@gmail.com\n"
         "</pre>\n\n"
+        "ℹ️ <i>Optional 7th line = phone number (needed by some stores).</i>\n"
         "❗ <i>Use this exact format for best results.</i>",
         parse_mode="HTML"
     )
@@ -143,31 +144,36 @@ async def handle_shipping_line(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     text = message.text.strip()
 
-    lines = None
+    shipping_lines = user_data.get('shipping_lines')
+    if not isinstance(shipping_lines, list):
+        shipping_lines = []
+        user_data['shipping_lines'] = shipping_lines
+
+    phone = None
+
     if "\n" in text:
         parts = [p.strip() for p in text.splitlines() if p.strip()]
-        if len(parts) >= 6:
+        if len(parts) >= 7:
             lines = parts[:6]
+            phone = parts[6]
+        elif len(parts) == 6:
+            lines = parts
         else:
-            if 'shipping_lines' not in user_data or not isinstance(user_data['shipping_lines'], list):
-                user_data['shipping_lines'] = []
-            shipping_lines = cast(list[str], user_data['shipping_lines'])
             shipping_lines.extend(parts)
             remaining = 6 - len(shipping_lines)
-            await message.reply_text(
-                f"{PremiumIcons.INBOX} <b>Line received</b>: <code>{parts[-1] if parts else text}</code>\n"
-                f"📊 {remaining} more line(s) needed.\n\n"
-                f"Current lines: {len(shipping_lines)}/6",
-                parse_mode="HTML"
-            )
-            return
+            if remaining > 0:
+                await message.reply_text(
+                    f"{PremiumIcons.INBOX} <b>Line received</b>: <code>{parts[-1]}</code>\n"
+                    f"📊 {remaining} more line(s) needed.\n\n"
+                    f"Current lines: {len(shipping_lines)}/6",
+                    parse_mode="HTML"
+                )
+                return
+            lines = shipping_lines
     else:
-        if 'shipping_lines' not in user_data or not isinstance(user_data['shipping_lines'], list):
-            user_data['shipping_lines'] = []
-        shipping_lines = cast(list[str], user_data['shipping_lines'])
-        shipping_lines.append(text)
-        remaining = 6 - len(shipping_lines)
-        if remaining > 0:
+        if len(shipping_lines) < 6:
+            shipping_lines.append(text)
+            remaining = 6 - len(shipping_lines)
             await message.reply_text(
                 f"{PremiumIcons.INBOX} <b>Line received</b>: <code>{text}</code>\n"
                 f"📊 {remaining} more line(s) needed.\n\n"
@@ -175,10 +181,10 @@ async def handle_shipping_line(update: Update, context: ContextTypes.DEFAULT_TYP
                 parse_mode="HTML"
             )
             return
+        # Already have the 6 required lines — treat this as the optional phone.
+        phone = text
         lines = shipping_lines
 
-    if lines is None:
-        lines = cast(list[str], user_data.get('shipping_lines', []))
     if len(lines) != 6:
         await message.reply_text("❌ You need exactly 6 lines. Please start over with /start")
         user_data['shipping_lines'] = []
@@ -191,6 +197,7 @@ async def handle_shipping_line(update: Update, context: ContextTypes.DEFAULT_TYP
         'state': lines[3],
         'zip': lines[4],
         'email': lines[5],
+        'phone': phone or '',
     }
     user_data['checkout_step'] = 'waiting_cards'
     user_data.pop('shipping_lines', None)
@@ -302,19 +309,30 @@ async def process_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     async def send_progress(msg: str):
-        await update.effective_message.reply_text(msg)
+        try:
+            await update.effective_message.reply_text(msg)
+        except Exception:
+            pass
 
-    # Run the blocking runner in a threadpool
+    # Run the blocking runner in a threadpool. Progress updates are scheduled on
+    # the main loop WITHOUT blocking the worker thread (no .result()).
     main_loop = asyncio.get_event_loop()
+
+    def _push_progress(msg: str):
+        try:
+            main_loop.call_soon_threadsafe(asyncio.ensure_future, send_progress(msg))
+        except Exception:
+            pass
+
     result = await main_loop.run_in_executor(
         None,
         run_checkout_with_fallback,
         url,
         shipping,
         cards,
-        lambda msg: asyncio.run_coroutine_threadsafe(send_progress(msg), main_loop).result(),
+        _push_progress,
         HEADLESS_CHECKOUT,
-        None,  # CAPTCHA will be solved automatically by engines (2Captcha)
+        None,  # CAPTCHA is solved automatically by engines (2Captcha)
     )
 
 

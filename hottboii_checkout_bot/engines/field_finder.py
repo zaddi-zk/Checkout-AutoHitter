@@ -4,6 +4,7 @@ Universal form filler — handles ANY website layout using keyword-based field
 classification, pattern detection, label scanning, and smart select handling.
 """
 import re
+import time
 from typing import Any, Dict, List, Optional
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import Select
@@ -219,11 +220,12 @@ class SmartFormFiller:
                     continue
         return None
 
-    def fill_input(self, el: WebElement, value: str) -> bool:
-        """Fill a single input field with the value, using JS as fallback.
+    def fill_input(self, el: WebElement, value: str, human: bool = True) -> bool:
+        """Fill a single input field with the value.
 
-        Anti-duplication: some fields behave oddly with send_keys (value gets appended).
-        We force-set the value via JS after clearing, then trigger input/change.
+        Prefers human-like character-by-character typing (anti-bot), verifies
+        the resulting value, and falls back to JS force-set if the field did
+        not accept the typed text (prevents value duplication).
         """
         if not el:
             return False
@@ -233,29 +235,59 @@ class SmartFormFiller:
         except Exception:
             return False
 
-        # Ensure clear + JS force-set to prevent duplicated text
+        try:
+            el.click()
+        except Exception:
+            pass
         try:
             el.clear()
         except Exception:
             pass
 
+        if human:
+            try:
+                from config import HUMANIZE
+                if not HUMANIZE:
+                    human = False
+            except Exception:
+                pass
+
+        if human:
+            from .humanize import type_human
+            if type_human(el, value):
+                try:
+                    if (el.get_attribute("value") or "") == value:
+                        return True
+                except Exception:
+                    pass
+                # Field didn't keep the text — force-set via JS.
+                try:
+                    self.driver.execute_script(
+                        "arguments[0].value = arguments[1];"
+                        "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));"
+                        "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                        el,
+                        value,
+                    )
+                    return True
+                except Exception:
+                    pass
+
         try:
-            # Force value (prevents 'value + value' issues like email duplication)
-            self.driver.execute_script(
-                "arguments[0].value = arguments[1];" 
-                "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));" 
-                "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));" 
-                "arguments[0].dispatchEvent(new Event('blur', {bubbles:true}));",
-                el,
-                value,
-            )
+            el.send_keys(value)
             return True
         except Exception:
             pass
 
-        # Fallback to send_keys if JS fails
+        # Last resort: JS force-set
         try:
-            el.send_keys(value)
+            self.driver.execute_script(
+                "arguments[0].value = arguments[1];"
+                "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));"
+                "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                el,
+                value,
+            )
             return True
         except Exception:
             pass
@@ -344,11 +376,84 @@ class SmartFormFiller:
             if val:
                 self.fill_field(ftype, val)
 
-    def find_card_fields(self) -> Dict[str, Optional[WebElement]]:
-        """Find card number, expiry, and CVV fields using all strategies."""
+    def find_card_fields_enhanced(self) -> Dict[str, Optional[WebElement]]:
+        """Enhanced card field finder that works on nested iframes and common checkout providers."""
         result = {"number": None, "expiry": None, "cvv": None}
 
-        # Collect all visible text inputs
+        # 1. Search in the current document context.
+        self._search_card_fields_in_context(result)
+
+        # 2. If any field is still missing, scan iframe contexts.
+        iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
+        for frame in iframes:
+            try:
+                self.driver.switch_to.frame(frame)
+                self._search_card_fields_in_context(result)
+                self.driver.switch_to.default_content()
+                if all(result.values()):
+                    break
+            except Exception:
+                try:
+                    self.driver.switch_to.default_content()
+                except Exception:
+                    pass
+
+        # 3. Fallback selectors for common Stripe / Shopify / Payment fields.
+        if not result["number"]:
+            number_selectors = [
+                "input[data-elements-stable-field-name='cardNumber']",
+                "input[name='cardnumber']",
+                "input[autocomplete='cc-number']",
+                "input[placeholder*='Card Number']",
+                "input[aria-label*='Card Number']",
+            ]
+            for sel in number_selectors:
+                try:
+                    el = self.driver.find_element(By.CSS_SELECTOR, sel)
+                    if el.is_displayed():
+                        result["number"] = el
+                        break
+                except Exception:
+                    pass
+
+        if not result["expiry"]:
+            expiry_selectors = [
+                "input[data-elements-stable-field-name='cardExpiry']",
+                "input[name='expiry']",
+                "input[autocomplete='cc-exp']",
+                "input[placeholder*='MM / YY']",
+                "input[aria-label*='Expiration']",
+            ]
+            for sel in expiry_selectors:
+                try:
+                    el = self.driver.find_element(By.CSS_SELECTOR, sel)
+                    if el.is_displayed():
+                        result["expiry"] = el
+                        break
+                except Exception:
+                    pass
+
+        if not result["cvv"]:
+            cvv_selectors = [
+                "input[data-elements-stable-field-name='cardCvc']",
+                "input[name='cvc']",
+                "input[autocomplete='cc-csc']",
+                "input[placeholder*='CVV']",
+                "input[aria-label*='CVV']",
+            ]
+            for sel in cvv_selectors:
+                try:
+                    el = self.driver.find_element(By.CSS_SELECTOR, sel)
+                    if el.is_displayed():
+                        result["cvv"] = el
+                        break
+                except Exception:
+                    pass
+
+        return result
+
+    def _search_card_fields_in_context(self, result: Dict[str, Optional[WebElement]]):
+        """Search for card fields in the current frame context."""
         inputs = []
         try:
             inputs = self.driver.find_elements(
@@ -365,39 +470,57 @@ class SmartFormFiller:
                 if v:
                     continue
                 text = self._get_field_text(inp)
-                classified = self.classify_field(inp)
-                if classified in ("number", "expiry", "cvv"):
-                    if not result[classified]:
-                        result[classified] = inp
-                        continue
-                # Pattern-based detection
                 maxlen = 0
                 try:
                     maxlen = int(inp.get_attribute("maxlength") or 0)
                 except Exception:
                     pass
-                placeholder = (inp.get_attribute("placeholder") or "").lower()
-                name_attr = (inp.get_attribute("name") or "").lower()
+
                 if not result["number"]:
-                    if maxlen >= 15 or "card" in placeholder or "card" in name_attr:
+                    if maxlen >= 15 or "card" in text or "number" in text:
                         result["number"] = inp
                         continue
                 if not result["expiry"]:
-                    if maxlen <= 7 or "expir" in placeholder or "expir" in name_attr or "valid" in placeholder:
+                    if maxlen <= 7 and ("expir" in text or "valid" in text or "mm/yy" in text):
                         result["expiry"] = inp
                         continue
                 if not result["cvv"]:
-                    if maxlen <= 4 or "cvv" in placeholder or "cvv" in name_attr or "cvc" in placeholder or "security" in placeholder:
+                    if maxlen <= 4 and ("cvv" in text or "cvc" in text or "security" in text):
                         result["cvv"] = inp
                         continue
             except Exception:
                 continue
 
-        # If still missing fields, try inside iframes
-        if None in result.values():
-            self._search_card_fields_in_iframes(result)
+    def find_card_fields(self) -> Dict[str, Optional[WebElement]]:
+        return self.find_card_fields_enhanced()
 
-        return result
+    def click_pay_button_with_retry(self, max_attempts: int = 5) -> bool:
+        """Find and click the pay button with retries and iframe fallback."""
+        for attempt in range(max_attempts):
+            try:
+                btn = self.find_pay_button()
+                if btn:
+                    self.driver.execute_script("arguments[0].click();", btn)
+                    return True
+
+                for frame in self.driver.find_elements(By.TAG_NAME, "iframe"):
+                    try:
+                        self.driver.switch_to.frame(frame)
+                        btn = self.find_pay_button()
+                        if btn:
+                            self.driver.execute_script("arguments[0].click();", btn)
+                            self.driver.switch_to.default_content()
+                            return True
+                        self.driver.switch_to.default_content()
+                    except Exception:
+                        try:
+                            self.driver.switch_to.default_content()
+                        except Exception:
+                            pass
+                time.sleep(0.5)
+            except Exception:
+                pass
+        return False
 
     def _search_card_fields_in_iframes(self, result: Dict[str, Optional[WebElement]]):
         """Search inside all iframes for card fields."""
@@ -447,6 +570,28 @@ class SmartFormFiller:
 
         if fields["cvv"] and cvv:
             self.fill_input(fields["cvv"], cvv)
+
+    def reset_card_fields(self):
+        """Clear card fields so the next card can be filled (error recovery)."""
+        try:
+            fields = self.find_card_fields()
+        except Exception:
+            fields = {}
+        for el in fields.values():
+            if not el:
+                continue
+            try:
+                el.clear()
+            except Exception:
+                pass
+            try:
+                self.driver.execute_script("arguments[0].value = '';", el)
+            except Exception:
+                pass
+        try:
+            self.driver.switch_to.default_content()
+        except Exception:
+            pass
 
     def find_pay_button(self) -> Optional[WebElement]:
         """Find ANY clickable submit/pay element using exhaustive search."""
