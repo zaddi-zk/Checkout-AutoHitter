@@ -1,0 +1,12 @@
+.git
+.venv
+.vs
+.vscode
+**/__pycache__/
+**/*.py[cod]
+**/.env
+**/*.pkl
+**/*.pkl_*
+**/*.db
+**/*.log
+hottboii_checkout_bot/bot_pid.txt

@@ -10,6 +10,7 @@ Fully automated Shopify/Stripe checkout bot with:
 """
 
 import logging
+import os
 import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Tuple
@@ -31,7 +32,7 @@ from telegram.ext import (
 # CONFIGURATION (Load from .env or hardcode)
 # ======================================================================
 
-BOT_TOKEN = "8899289220:AAEZmznaurY6w2fQbULdunpBUtW95wLop70"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 8711230373
 DEVELOPER_ID = 8366864444
 OWNER_ID = ADMIN_ID  # Same as admin
@@ -58,7 +59,7 @@ PRICING: Dict[str, Dict[str, Any]] = {
 
 import sqlite3
 from pathlib import Path
-from config import PremiumIcons
+from config import DB_PATH, PremiumIcons
 
 # Checkout handlers (import directly to avoid circular-import type inference issues)
 from handlers.checkout import (
@@ -67,8 +68,6 @@ from handlers.checkout import (
     handle_shipping_line,
     handle_cards,
 )
-
-DB_PATH = Path("hottboii.db")
 
 def init_db():
     """Initialize database tables."""
@@ -1469,7 +1468,12 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 def main():
     """Start the bot."""
     global application
-    persistence = PicklePersistence(filepath="bot_data.pkl", single_file=False)
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "BOT_TOKEN is not set. Set the BOT_TOKEN environment variable "
+            "(add it as a Railway variable in your service)."
+        )
+    persistence = PicklePersistence(filepath=str(DB_PATH.parent / "bot_data.pkl"), single_file=False)
     application = Application.builder().token(BOT_TOKEN).persistence(persistence).build()
 
     # Initialize database

@@ -26,7 +26,12 @@ else:
     logger.warning(".env not found at %s, falling back to CWD load", _dotenv_path)
 
 # --- Telegram ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8899289220:AAEZmznaurY6w2fQbULdunpBUtW95wLop70")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError(
+        "BOT_TOKEN is not set. Set the BOT_TOKEN environment variable "
+        "(add it as a Railway variable in your service)."
+    )
 ADMIN_ID = int(os.getenv("ADMIN_ID", "8711230373"))
 DEVELOPER_ID = int(os.getenv("DEVELOPER_ID", "8366864444"))
 OWNER_ID = ADMIN_ID
@@ -74,17 +79,16 @@ PRICING = {
 }
 
 # --- Database ---
-DB_PATH = Path("hottboii.db")
+# Override DB_PATH (e.g. /data/hottboii.db) to persist data via a Railway volume.
+DB_PATH = Path(os.getenv("DB_PATH", "hottboii.db"))
 
 # --- Checkout engine settings ---
 # Prefer HEADLESS (new) but keep HEADLESS_CHECKOUT for backward compatibility.
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 HEADLESS_CHECKOUT = os.getenv("HEADLESS_CHECKOUT", str(HEADLESS)).lower() == "true"
 
-# Load CAPTCHA_API_KEY - first from env, with hardcoded fallback
+# Load CAPTCHA_API_KEY from environment only
 CAPTCHA_API_KEY = os.getenv("CAPTCHA_API_KEY", "")
-if not CAPTCHA_API_KEY:
-    CAPTCHA_API_KEY = "sand-14244b2bfbf329bc60b05d8817a4e50aae16598ed838b3b209318dad58ac8160"
 
 if not CAPTCHA_API_KEY:
     logger.warning("CAPTCHA_API_KEY is empty! CAPTCHA solving will fail.")
