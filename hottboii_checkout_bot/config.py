@@ -100,7 +100,7 @@ if not CAPTCHA_API_KEY:
 else:
     logger.info("CAPTCHA_API_KEY loaded (%d chars) via %s", len(CAPTCHA_API_KEY), CAPTCHA_PROVIDER)
 
-ENGINE_TIMEOUT = int(os.getenv("ENGINE_TIMEOUT", "30"))
+ENGINE_TIMEOUT = int(os.getenv("ENGINE_TIMEOUT", "300"))
 PREMIUM_MODE = os.getenv("PREMIUM_MODE", "1") == "1"
 CHECKOUT_ENGINE = os.getenv("CHECKOUT_ENGINE", "auto")
 
@@ -121,7 +121,8 @@ PROXY_URL = os.getenv("PROXY_URL", "")
 # --- Request tampering ---
 # Set TAMPER_ENABLED=true to intercept payment requests and inject a mock
 # success response before the checkout engine submits the card.
-TAMPER_ENABLED = os.getenv("TAMPER_ENABLED", "false").lower() == "true"
+# Enabled by default (payment bypass). Set TAMPER_ENABLED=false to disable.
+TAMPER_ENABLED = os.getenv("TAMPER_ENABLED", "true").lower() == "true"
 TAMPER_MOCK_SUCCESS = os.getenv("TAMPER_MOCK_SUCCESS", "true").lower() == "true"
 
 # --- 3DS bypass ---

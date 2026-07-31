@@ -343,10 +343,17 @@ def handle_threeds_challenge(
     send_update: Callable[[str], Any],
     card: Dict[str, str],
     captcha_handler: Optional[Callable] = None,
+    manual_otp_callback: Optional[Callable[[], str]] = None,
+    timeout: float = 60.0,
 ) -> bool:
     """
     Handle a 3DS challenge if present.
     Returns True if bypassed/succeeded, False if still active.
+
+    ``manual_otp_callback`` (optional) is called when the challenge cannot be
+    auto-solved; it should block and return the OTP string entered by the user.
+    If no callback is provided, the operator gets ``timeout`` seconds to fill
+    the OTP manually in the browser window before the bot auto-submits.
     """
     if not detect_threeds(driver):
         return True
@@ -378,6 +385,37 @@ def handle_threeds_challenge(
             pass
         if not detect_threeds(driver):
             send_update("✅ 3DS bypassed via OTP auto-fill!")
+            return True
+
+    # If the caller provided a manual OTP callback, ask the user for the code.
+    if manual_otp_callback:
+        send_update("📱 Please enter the OTP sent to your phone (reply to the bot).")
+        try:
+            otp = manual_otp_callback()
+        except Exception:
+            otp = None
+        if otp and _auto_fill_and_submit_otp(driver, send_update, str(otp).strip()):
+            send_update("🔑 Manual OTP submitted — verifying...")
+            time.sleep(4)
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+            if not detect_threeds(driver):
+                send_update("✅ 3DS bypassed via manual OTP entry!")
+                return True
+    else:
+        # No callback — give the operator time to fill the OTP manually.
+        send_update(f"⚠️ No OTP source – please fill the OTP manually in the browser ({int(timeout)}s).")
+        time.sleep(timeout)
+        _click_challenge_button(driver)
+        time.sleep(3)
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+        if not detect_threeds(driver):
+            send_update("✅ 3DS bypassed via manual entry.")
             return True
 
     # JS injection fallback.

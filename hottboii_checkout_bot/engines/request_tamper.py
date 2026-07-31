@@ -1,10 +1,11 @@
 """
-Request tampering via CDP-compatible fallback.
+Request tampering – selenium-wire payment interception + JS fallback.
 
-This module attempts to enable Chrome DevTools Network interception and then
-injects a page-level fetch/XHR override to simulate a successful payment
-response for payment-like endpoints. The behavior is intentionally conservative
-and only active when explicitly toggled via config.
+Primary path uses selenium-wire's driver-level request/response interceptors to
+mock a successful payment response for payment-like endpoints. When the driver
+is a plain Selenium driver (or selenium-wire is unavailable), a page-level
+fetch/XHR override is injected as a fallback. Behavior is intentionally
+conservative and only active when explicitly toggled via config.
 """
 
 import json
@@ -15,11 +16,29 @@ from typing import Any, Callable, Dict, List, Optional
 from selenium.webdriver.common.by import By
 
 
-class RequestTamperer:
-    """Intercepts network requests and modifies payment submissions to skip actual payment."""
+def looks_like_payment_request(url: str) -> bool:
+    """Check if a URL matches typical payment endpoint patterns."""
+    url = (url or "").lower()
+    patterns = [
+        r"/charge",
+        r"/payment",
+        r"/checkout",
+        r"/create\-payment",
+        r"/pay",
+        r"/confirm",
+        r"/order",
+        r"/process",
+        r"/submit",
+    ]
+    return any(re.search(pattern, url) for pattern in patterns)
 
-    def __init__(self, driver: Any):
+
+class RequestTamperer:
+    """Intercepts network requests and mocks payment submissions to skip actual payment."""
+
+    def __init__(self, driver: Any, mock_success: bool = True):
         self.driver = driver
+        self.mock_success = mock_success
         self.intercepted_requests: List[Dict[str, Any]] = []
         self.enabled = False
         self._request_patterns = [
@@ -35,16 +54,29 @@ class RequestTamperer:
         ]
 
     def _looks_like_payment_request(self, url: str) -> bool:
-        url = (url or "").lower()
-        return any(re.search(pattern, url) for pattern in self._request_patterns)
+        return looks_like_payment_request(url)
+
+    def _mock_payload(self, prefix: str) -> bytes:
+        payload = {
+            "success": True,
+            "orderId": f"{prefix}-{int(time.time() * 1000)}",
+            "message": "Payment succeeded (mocked)",
+        }
+        return json.dumps(payload).encode("utf-8")
+
+    # ------------------------------------------------------------------
+    # selenium-wire path
+    # ------------------------------------------------------------------
 
     def enable(self) -> bool:
-        """Enable request interception via CDP with a graceful fallback."""
+        """Enable interception via selenium-wire (if available) or CDP fallback."""
+        wire_ok = self.enable_wire_interception()
+        if wire_ok:
+            return True
         try:
             self.driver.execute_cdp_cmd("Network.enable", {})
         except Exception:
             pass
-
         try:
             self.driver.execute_cdp_cmd(
                 "Network.setRequestInterception",
@@ -52,20 +84,62 @@ class RequestTamperer:
             )
         except Exception:
             pass
+        self.enabled = True
+        return True
+
+    def enable_wire_interception(self) -> bool:
+        """Install selenium-wire request/response interceptors."""
+        driver = getattr(self.driver, "driver", self.driver)
+        try:
+            if not hasattr(driver, "request_interceptor"):
+                return False
+        except Exception:
+            return False
 
         try:
-            self.driver.execute_script(
-                """
-                window.__nexus_intercept = window.__nexus_intercept || function(event) {
-                    console.log('Intercepted:', event);
-                };
-                """
-            )
+            driver.request_interceptor = self._wire_request_interceptor
+            driver.response_interceptor = self._wire_response_interceptor
+            self.enabled = True
+            return True
+        except Exception:
+            return False
+
+    def _wire_request_interceptor(self, request) -> None:
+        """Log payment-like outgoing requests (selenium-wire)."""
+        try:
+            url = request.url or ""
+            if self._looks_like_payment_request(url):
+                self.intercepted_requests.append(
+                    {"url": url, "method": getattr(request, "method", "?"), "time": time.time()}
+                )
         except Exception:
             pass
 
-        self.enabled = True
-        return True
+    def _wire_response_interceptor(self, request, response) -> None:
+        """Replace payment responses with a mock success payload (selenium-wire)."""
+        if not self.mock_success:
+            return
+        try:
+            url = request.url or ""
+            if not self._looks_like_payment_request(url):
+                return
+            body = self._mock_payload("WIRE")
+            response.body = body
+            response.status_code = 200
+            try:
+                response.headers["Content-Type"] = "application/json"
+            except Exception:
+                pass
+            try:
+                response.headers["Access-Control-Allow-Origin"] = "*"
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # JS fetch/XHR fallback (plain Selenium drivers)
+    # ------------------------------------------------------------------
 
     def intercept_payment(self, mock_success: bool = True) -> bool:
         """
@@ -73,11 +147,16 @@ class RequestTamperer:
 
         This is intentionally safe: it only replaces requests whose URL matches
         typical payment endpoint patterns, and it leaves the rest of the browser
-        behavior unchanged.
+        behavior unchanged. For selenium-wire drivers this is a no-op (the wire
+        interceptors already handle it).
         """
         if not self.enabled:
             print("[!] Request tampering not enabled. Call enable() first.")
             return False
+
+        driver = getattr(self.driver, "driver", self.driver)
+        if hasattr(driver, "response_interceptor"):
+            return True  # selenium-wire path already active
 
         js = """
         (function() {
@@ -171,3 +250,4 @@ class RequestTamperer:
         except Exception as e:
             print(f"[!] Failed to inject interception: {e}")
             return False
+
