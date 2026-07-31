@@ -1,0 +1,13 @@
+.env
+.venv/
+.vs/
+.vscode/
+__pycache__/
+*.py[cod]
+*.pkl
+bot_data.pkl_chat_data
+bot_data.pkl_user_data
+*.db
+bot_errors.log
+bot_output.log
+bot_pid.txt
