@@ -1184,17 +1184,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⚠️ Error processing payment: {e}")
         return
 
-    # When a 3DS challenge is awaiting a manual OTP from this user, consume the
-    # reply as the OTP and wake the blocking checkout worker thread.
-    if user_data.get('awaiting_otp') and update.message.text:
-        otp_value = update.message.text.strip()
-        user_data['otp_value'] = otp_value
-        await update.message.reply_text("🔑 OTP received — submitting to the challenge...")
-        otp_event = user_data.get('otp_event')
-        if otp_event is not None:
-            otp_event.set()
-        return
-
     step = user_data.get('checkout_step')
     try:
         if step == 'waiting_url':

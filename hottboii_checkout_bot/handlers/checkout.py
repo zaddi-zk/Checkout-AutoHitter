@@ -4,7 +4,6 @@ Main checkout logic – URL, shipping, cards, and processing.
 """
 
 import asyncio
-import threading
 from datetime import datetime
 from typing import Any, cast
 
@@ -325,24 +324,6 @@ async def process_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    def _manual_otp_callback() -> str:
-        """Blocking OTP waiter invoked from the checkout worker thread.
-
-        Puts the bot into 'awaiting_otp' state so the text router intercepts
-        the user's next message as the OTP reply, then blocks on a
-        threading.Event until that message arrives (or a timeout expires).
-        """
-        otp_event = threading.Event()
-        user_data['otp_event'] = otp_event
-        user_data['otp_value'] = None
-        user_data['awaiting_otp'] = True
-        try:
-            otp_event.wait(timeout=90)
-        finally:
-            user_data['awaiting_otp'] = False
-            user_data.pop('otp_event', None)
-        return str(user_data.get('otp_value') or "").strip()
-
     result = await main_loop.run_in_executor(
         None,
         run_checkout_with_fallback,
@@ -352,7 +333,6 @@ async def process_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _push_progress,
         HEADLESS_CHECKOUT,
         None,  # CAPTCHA is solved automatically by engines (2Captcha)
-        _manual_otp_callback,
     )
 
 

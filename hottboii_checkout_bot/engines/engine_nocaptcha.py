@@ -13,7 +13,6 @@ def perform_checkout(
     proxy: Optional[str] = None,
     captcha_handler: Optional[Callable[..., Any]] = None,
     max_runtime_seconds: int = 300,
-    manual_otp_callback: Optional[Callable[[], str]] = None,
 ) -> Dict[str, str]:
     send_update("🚀 Engine 2: No-CAPTCHA (fast)")
     return perform_checkout_core(
@@ -23,5 +22,4 @@ def perform_checkout(
         captcha_handler=captcha_handler,
         strategy="nocaptcha",
         max_runtime_seconds=max_runtime_seconds,
-        manual_otp_callback=manual_otp_callback,
     )

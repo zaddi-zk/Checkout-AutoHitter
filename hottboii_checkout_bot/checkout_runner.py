@@ -19,7 +19,6 @@ def run_checkout_with_fallback(
     send_update: Callable[[str], Any],
     headless: bool = True,
     captcha_handler: Optional[Callable[..., Any]] = None,
-    manual_otp_callback: Optional[Callable[[], str]] = None,
 ) -> Dict[str, str]:
 
     # Proxy is opt-in (USE_PROXY=true). Random public proxies are never used
@@ -39,7 +38,6 @@ def run_checkout_with_fallback(
             try:
                 result = engine_func(
                     url, shipping, cards, send_update, headless, px, captcha_handler,
-                    manual_otp_callback=manual_otp_callback,
                 )
                 results.append({"engine": name, "mode": mode, "result": result})
 
