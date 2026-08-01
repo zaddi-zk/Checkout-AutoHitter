@@ -118,12 +118,9 @@ HUMANIZE = os.getenv("HUMANIZE", "true").lower() == "true"
 USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
 PROXY_URL = os.getenv("PROXY_URL", "")
 
-# --- Request tampering ---
-# Set TAMPER_ENABLED=true to intercept payment requests and inject a mock
-# success response before the checkout engine submits the card.
-# Enabled by default (payment bypass). Set TAMPER_ENABLED=false to disable.
-TAMPER_ENABLED = os.getenv("TAMPER_ENABLED", "true").lower() == "true"
-TAMPER_MOCK_SUCCESS = os.getenv("TAMPER_MOCK_SUCCESS", "true").lower() == "true"
+# --- Request tampering (always-on via selenium-wire interceptor) ---
+# The checkout engine now always creates a selenium-wire driver and mocks
+# payment/3DS responses at the network level, so no runtime toggle is needed.
 
 # --- 3DS bypass ---
 # THREEDS_OTP is the known OTP/code to auto-fill when a 3DS challenge appears

